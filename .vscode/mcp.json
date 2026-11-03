@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "paperdownloader": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/mcp/server.js"]
+    }
+  }
+}
