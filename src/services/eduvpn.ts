@@ -129,6 +129,49 @@ const defaultOps: VpnOps = { isFauVpnConnected, isClientRunning, startClient, co
 
 let connecting: Promise<void> | undefined;
 
+export type VpnStatus = {
+  mode: "auto" | "none" | "fau-eduvpn";
+  status: "connected" | "disabled" | "not_found" | "unavailable";
+  detail?: string;
+};
+
+type VpnDetectionOps = {
+  platform: string;
+  isConnected: () => Promise<boolean>;
+  findClient: () => string;
+  ensure: () => Promise<void>;
+};
+
+/** Detect and connect eduVPN by default without making it a download requirement. */
+export async function ensureConfiguredVpn(ops: VpnDetectionOps = { platform: process.platform, isConnected: isFauVpnConnected, findClient: findEduVpnClient, ensure: ensureFauVpnConnected }): Promise<VpnStatus> {
+  const rawMode = (process.env.VPN_MODE ?? "auto").trim().toLowerCase() || "auto";
+  if (rawMode !== "auto" && rawMode !== "none" && rawMode !== "fau-eduvpn") {
+    throw new Error(`Unsupported VPN_MODE: ${rawMode}. Use auto, none, or fau-eduvpn.`);
+  }
+  const mode = rawMode;
+  if (mode === "none") return { mode, status: "disabled" };
+  if (mode === "fau-eduvpn") {
+    await ops.ensure();
+    return { mode, status: "connected" };
+  }
+  if (ops.platform !== "win32") return { mode, status: "unavailable", detail: "Automatic eduVPN detection is available on Windows only." };
+  try {
+    if (await ops.isConnected()) return { mode, status: "connected" };
+  } catch {
+    return { mode, status: "unavailable", detail: "Could not check the eduVPN connection." };
+  }
+  try {
+    ops.findClient();
+  } catch {
+    return { mode, status: "not_found", detail: "eduVPN client was not found in configured or standard locations." };
+  }
+  try {
+    await ops.ensure();
+    return { mode, status: "connected" };
+  } catch {
+    return { mode, status: "unavailable", detail: "eduVPN was detected but the FAU connection could not be established." };
+  }
+}
 /** Coalesce simultaneous download requests so they cannot send Enter twice. */
 export async function ensureFauVpnConnected(ops: VpnOps = defaultOps): Promise<void> {
   if (ops !== defaultOps) return connectAndVerify(ops);

@@ -8,15 +8,15 @@ This is a download tool. It does not search for, select, rank, or recommend pape
 
 ## Important: Elsevier robot verification
 
-**ScienceDirect / Elsevier may ask “Are you a robot?” even when the FAU VPN and institutional login are already active.** Human verification may also be required for other publishers.
+**ScienceDirect / Elsevier may ask “Are you a robot?” even when institutional access is already active.** Human verification may also be required for other publishers.
 
 The user must complete verification in PaperDownloader's own browser window. The program does not solve CAPTCHAs or enter credentials. After verification, reuse the same browser profile and retry the download. A timeout or a missing PDF link does not by itself prove that the institution lacks access. Challenge detection is not guaranteed, and a PDF capture can time out before a challenge is completed.
 
 ## Requirements and setup
 
 - Node.js 22 or later.
-- Windows with the eduVPN client, a saved FAU profile, and valid authorization. The current download workflow checks the FAU VPN before every download.
-- An interactive Windows desktop for automatic VPN connection, browser sign-in, and any human verification.
+- A network connection and, when necessary, the user's valid institutional access. eduVPN is checked by default but is not required for downloading.
+- A desktop session when a visible browser, institutional sign-in, or human verification is required. The optional eduVPN integration requires an interactive Windows desktop.
 - Playwright Chromium. A persistent profile is separate from the user's regular Edge browser.
 
 From the project directory:
@@ -27,9 +27,9 @@ npx playwright install chromium
 npm run build
 ```
 
-Configure environment variables as needed. The project loads a `.env` file if present, but on the current machine `.env` is already a directory containing private data. Do not overwrite it; use process environment variables instead.
+Configure environment variables as needed. The project loads a `.env` file if present. If `.env` is already a directory, leave it intact and use process environment variables instead.
 
-On the current machine, the project is at `E:/Study/Paper-pool/Paperdownloader`, and the bundled browser directory is `E:/Study/Paper-pool/Paperdownloader/browsers`. When this directory exists, the project selects it by default unless `PLAYWRIGHT_BROWSERS_PATH` is explicitly set. Browser binaries can instead be installed through Playwright in its normal location. The default download and browser-profile paths are relative to the project directory.
+When the project's `browsers/` directory exists, it is selected by default unless `PLAYWRIGHT_BROWSERS_PATH` is explicitly set. Browser binaries can instead be installed through Playwright in its normal location. The default download and browser-profile paths are relative to the project directory.
 
 ## Download a paper
 
@@ -41,15 +41,12 @@ If PaperDownloader's MCP server is available, call `download_paper_pdf` with the
 { "url": "https://publisher.example/article", "fileName": "optional-name" }
 ```
 
-The result contains the local `pdfPath`, article title, citation metadata, PDF URL, and download source. The stdio server can be started with `npm run mcp` after building. For the current machine, an MCP client can use:
+The result contains the local `pdfPath`, article title, citation metadata, PDF URL, and download source. The stdio server can be started with `npm run mcp` after building. An MCP client can use the absolute path to the built server:
 
 ```json
 {
   "command": "node",
-  "args": ["E:/Study/Paper-pool/Paperdownloader/dist/mcp/server.js"],
-  "env": {
-    "PLAYWRIGHT_BROWSERS_PATH": "E:/Study/Paper-pool/Paperdownloader/browsers"
-  }
+  "args": ["/absolute/path/to/Paperdownloader/dist/mcp/server.js"]
 }
 ```
 
@@ -60,7 +57,6 @@ The repository also includes a VS Code configuration at `.vscode/mcp.json`.
 Run from the project directory:
 
 ```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH = 'E:\Study\Paper-pool\Paperdownloader\browsers'
 npm run download -- 'https://publisher.example/article'
 ```
 
@@ -74,12 +70,11 @@ npm run start
 
 The server listens on `http://127.0.0.1:3000`. Send `POST /api/papers/download-pdf` with a JSON body containing `url` and, optionally, `fileName`.
 
-## VPN and institutional access
+## Optional VPN and institutional access
 
-Before a PDF download, the program checks the Windows adapter `eduvpn.fau.de`. If already connected, it continues without changing the connection. Otherwise, it attempts to start eduVPN and connect the saved FAU profile through Windows UI Automation without moving the mouse, then checks that the adapter is up. Depending on the client screen, this may briefly change keyboard focus. The program does not read the user's VPN password.
+By default, the downloader detects the FAU eduVPN connection on Windows and attempts to connect an installed client when needed. If the client is missing, the platform is unsupported, or connection fails, the download still proceeds. The result includes a `vpn` object describing the status so the caller can decide whether VPN setup is needed. A failed download also includes the unavailable VPN status in its error message.
 
-This automatic connection depends on an interactive Windows desktop and the expected FAU client configuration. If it cannot connect, or the user must complete authentication or MFA, the download fails with a message and can be retried after the user resolves it. Starting the application alone is not evidence of a VPN connection.
-
+For a strict VPN requirement, set `VPN_MODE=fau-eduvpn`: a connection failure then stops the download. Set `VPN_MODE=none` to disable VPN management. The optional FAU integration requires an interactive Windows desktop, may briefly change keyboard focus, and never deliberately disconnects an active tunnel. It does not read the VPN password. Other VPNs are managed outside this tool.
 For institutional sign-in, open the article in PaperDownloader's persistent browser:
 
 ```bash
@@ -105,7 +100,8 @@ A publisher page showing an institution name does not itself prove that a partic
 | `PLAYWRIGHT_BROWSERS_PATH` | Project `browsers/` if present; otherwise Playwright default | Chromium installation directory |
 | `BROWSER_CHANNEL` | Playwright Chromium | Optional browser channel, such as `msedge` |
 | `PLAYWRIGHT_HEADLESS` | `false` | Headless browser mode; publisher access may be affected |
-| `EDUVPN_CLIENT_PATH` | Search standard Windows locations | Optional full path to `eduVPN.Client.exe` |
+| `VPN_MODE` | `auto` | `auto`: detect and attempt connection without blocking downloads; `none`: disabled; `fau-eduvpn`: require the FAU VPN |
+| `EDUVPN_CLIENT_PATH` | Search standard Windows locations | Optional full path to `eduVPN.Client.exe` when the integration is enabled |
 | `HUMAN_VERIFICATION_TIMEOUT_MS` | `300000` | Maximum wait for a recognized human-verification challenge |
 | `PORT` | `3000` | Local HTTP server port |
 | `ELSEVIER_API_KEY`, `ELSEVIER_INSTTOKEN` | Unset | Optional Elsevier API credentials; full text requires entitlement |

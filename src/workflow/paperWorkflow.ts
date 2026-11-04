@@ -4,7 +4,7 @@ import { appConfig } from "../config.js";
 import { PersistentEdgeBrowser, type CitationMeta } from "../browser/persistentBrowser.js";
 import { extractSciencedirectPii, fetchElsevierPdf } from "../services/elsevier.js";
 import { archiveToZotero, type ZoteroArchiveInput } from "../services/zotero.js";
-import { ensureFauVpnConnected } from "../services/eduvpn.js";
+import { ensureConfiguredVpn, type VpnStatus } from "../services/eduvpn.js";
 
 export type PaperInfo = {
   pageUrl: string;
@@ -65,59 +65,68 @@ export class PaperWorkflow {
     citation: CitationMeta;
     source: "elsevier-api" | "browser";
     apiFallbackReason?: string;
+    vpn: VpnStatus;
   }> {
-    await ensureFauVpnConnected();
-    // Prefer the official Elsevier API for ScienceDirect: no browser, no captcha.
-    let apiFallbackReason: string | undefined;
-    // Keep caller-supplied names inside downloadDir (no path separators / traversal).
-    fileName = fileName?.replace(/[\\/:*?"<>|\x00-\x1f]+/g, "_").replace(/^\.+/, "").replace(/\.pdf$/i, "").trim() || undefined;
-    const pii = extractSciencedirectPii(url);
-    if (pii && appConfig.elsevierApiKey) {
-      const api = await fetchElsevierPdf(pii);
-      if (api.ok) {
-        const title = api.citation.title ?? pii;
-        const pdfPath = path.join(appConfig.downloadDir, `${fileName ?? this.buildSafeFileName(url, title)}.pdf`);
-        await mkdir(path.dirname(pdfPath), { recursive: true });
-        await writeFile(pdfPath, api.bytes);
-        return { url, pdfUrl: `https://api.elsevier.com/content/article/pii/${pii}`, pdfPath, title, citation: api.citation, source: "elsevier-api" };
-      }
-      apiFallbackReason = api.reason;
-    }
-
-    const page = await this.browser.openPage(url);
-
+    const vpn = await ensureConfiguredVpn();
     try {
-      const citation = await this.browser.readCitationMeta(page);
-      const title = citation.title ?? (await page.title()).split(" | ")[0].trim();
-      const pdfUrl = await this.browser.waitForPdfUrl(page);
-
-      if (!pdfUrl) {
-        const bodyText = await page.locator("body").innerText();
-        const noAccess = /purchase pdf|get access|access through/i.test(bodyText);
-        throw new Error(
-          noAccess
-            ? `No full-text access for ${url}. ${loginHint(url)}`
-            : `No PDF link found on ${url}.`,
-        );
+      // Prefer the official Elsevier API for ScienceDirect: no browser, no captcha.
+      let apiFallbackReason: string | undefined;
+      // Keep caller-supplied names inside downloadDir (no path separators / traversal).
+      fileName = fileName?.replace(/[\\/:*?"<>|\x00-\x1f]+/g, "_").replace(/^\.+/, "").replace(/\.pdf$/i, "").trim() || undefined;
+      const pii = extractSciencedirectPii(url);
+      if (pii && appConfig.elsevierApiKey) {
+        const api = await fetchElsevierPdf(pii);
+        if (api.ok) {
+          const title = api.citation.title ?? pii;
+          const pdfPath = path.join(appConfig.downloadDir, `${fileName ?? this.buildSafeFileName(url, title)}.pdf`);
+          await mkdir(path.dirname(pdfPath), { recursive: true });
+          await writeFile(pdfPath, api.bytes);
+          return { url, pdfUrl: `https://api.elsevier.com/content/article/pii/${pii}`, pdfPath, title, citation: api.citation, source: "elsevier-api", vpn };
+        }
+        apiFallbackReason = api.reason;
       }
 
-      const safeName = fileName ?? this.buildSafeFileName(url, title);
-      const outputPath = path.join(appConfig.downloadDir, `${safeName}.pdf`);
-      const pdfPath = await this.browser.fetchPdf(pdfUrl, outputPath, page).catch((error: Error) => {
-        throw new Error(`${error.message}. If you lack full-text access: ${loginHint(url)}`);
-      });
+      const page = await this.browser.openPage(url);
 
-      return {
-        url,
-        pdfUrl,
-        pdfPath,
-        title,
-        citation,
-        source: "browser",
-        apiFallbackReason,
-      };
-    } finally {
-      await page.close();
+      try {
+        const citation = await this.browser.readCitationMeta(page);
+        const title = citation.title ?? (await page.title()).split(" | ")[0].trim();
+        const pdfUrl = await this.browser.waitForPdfUrl(page);
+
+        if (!pdfUrl) {
+          const bodyText = await page.locator("body").innerText();
+          const noAccess = /purchase pdf|get access|access through/i.test(bodyText);
+          throw new Error(
+            noAccess
+              ? `No full-text access for ${url}. ${loginHint(url)}`
+              : `No PDF link found on ${url}.`,
+          );
+        }
+
+        const safeName = fileName ?? this.buildSafeFileName(url, title);
+        const outputPath = path.join(appConfig.downloadDir, `${safeName}.pdf`);
+        const pdfPath = await this.browser.fetchPdf(pdfUrl, outputPath, page).catch((error: Error) => {
+          throw new Error(`${error.message}. If you lack full-text access: ${loginHint(url)}`);
+        });
+
+        return {
+          url,
+          pdfUrl,
+          pdfPath,
+          title,
+          citation,
+          source: "browser",
+          apiFallbackReason,
+          vpn,
+        };
+      } finally {
+        await page.close();
+      }
+    } catch (error) {
+      if (vpn.status === "not_found" || vpn.status === "unavailable") {
+        throw new Error((error instanceof Error ? error.message : String(error)) + " [VPN: " + vpn.status + "; " + (vpn.detail ?? "unknown") + "]", { cause: error });
+      }
+      throw error;
     }
   }
 

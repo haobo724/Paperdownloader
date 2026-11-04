@@ -23,7 +23,7 @@ server.registerTool(
     description:
       "Download the full-text PDF of a paper given its article page URL (ScienceDirect, Springer, Nature, IEEE Xplore, " +
       "or any page exposing citation_pdf_url). Uses the persistent logged-in browser session. Returns pdfPath (absolute " +
-      "local path), title and citation metadata. ScienceDirect may require institutional access or human verification.",
+      "local path), title, citation metadata, and VPN detection status. ScienceDirect may require institutional access or human verification.",
     inputSchema: {
       url: z.string().url().describe("Article landing page URL, e.g. https://link.springer.com/article/10.1007/..."),
       fileName: z.string().optional().describe("Optional file name without extension; default is derived from the title."),
