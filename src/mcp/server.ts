@@ -23,7 +23,7 @@ server.registerTool(
     description:
       "Download the full-text PDF of a paper given its article page URL (ScienceDirect, Springer, Nature, IEEE Xplore, " +
       "or any page exposing citation_pdf_url). Uses the persistent logged-in browser session. Returns pdfPath (absolute " +
-      "local path), title and citation metadata. If it fails with a no-access error, call open_login_page and ask the user to log in.",
+      "local path), title and citation metadata. ScienceDirect may require institutional access or human verification.",
     inputSchema: {
       url: z.string().url().describe("Article landing page URL, e.g. https://link.springer.com/article/10.1007/..."),
       fileName: z.string().optional().describe("Optional file name without extension; default is derived from the title."),
@@ -37,7 +37,7 @@ server.registerTool(
   {
     description:
       "Open an article page and return its metadata (title, DOI, journal, authors) and the detected PDF URL without downloading. " +
-      "pdfUrl = null usually means no full-text access (login needed).",
+      "A null pdfUrl means no link was detected; it does not determine access rights.",
     inputSchema: { url: z.string().url() },
   },
   ({ url }) => asToolResult(() => paperWorkflow.inspectPaper(url)),
@@ -60,7 +60,7 @@ server.registerTool(
   {
     description:
       "Open a page in the persistent browser window and leave it open so the HUMAN user can log in (institutional sign-in, " +
-      "captcha). The agent must not try to log in itself. After the user confirms, retry the download.",
+      "captcha). This uses the same persistent browser profile.",
     inputSchema: { url: z.string().url().describe("Usually the article URL that failed with a no-access error.") },
   },
   ({ url }) => asToolResult(() => paperWorkflow.openForLogin(url)),

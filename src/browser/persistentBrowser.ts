@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
 import { appConfig } from "../config.js";
+import { chromium, type BrowserContext, type Page } from "playwright";
 
 const HUMAN_VERIFICATION_TIMEOUT_MS = Number(process.env.HUMAN_VERIFICATION_TIMEOUT_MS ?? 300_000);
 /** How long to wait for PDF bytes when no human-verification challenge is shown. */
@@ -165,12 +165,23 @@ export class PersistentEdgeBrowser {
   // Note: callbacks passed to page.evaluate must not declare named inner functions, because tsx/esbuild
   // injects a `__name` helper into them that does not exist in the browser.
   async readCitationMeta(page: Page): Promise<CitationMeta> {
-    const meta = await page.evaluate(() =>
-      Array.from(document.querySelectorAll("meta[name^='citation_']")).map((m) => [
-        m.getAttribute("name") ?? "",
-        m.getAttribute("content")?.trim() ?? "",
-      ]),
-    );
+    let meta: string[][] | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        meta = await page.evaluate(() =>
+          Array.from(document.querySelectorAll("meta[name^='citation_']")).map((m) => [
+            m.getAttribute("name") ?? "",
+            m.getAttribute("content")?.trim() ?? "",
+          ]),
+        );
+        break;
+      } catch (error) {
+        if (!(error instanceof Error) || !/execution context was destroyed|cannot find context/i.test(error.message) || attempt === 4) throw error;
+        await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+        await page.waitForTimeout(500);
+      }
+    }
+    if (!meta) throw new Error("Could not read citation metadata after navigation.");
     const get = (name: string) => meta.find(([n, v]) => n === name && v)?.[1] || undefined;
 
     return {

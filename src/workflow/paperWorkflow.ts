@@ -4,6 +4,7 @@ import { appConfig } from "../config.js";
 import { PersistentEdgeBrowser, type CitationMeta } from "../browser/persistentBrowser.js";
 import { extractSciencedirectPii, fetchElsevierPdf } from "../services/elsevier.js";
 import { archiveToZotero, type ZoteroArchiveInput } from "../services/zotero.js";
+import { ensureFauVpnConnected } from "../services/eduvpn.js";
 
 export type PaperInfo = {
   pageUrl: string;
@@ -65,6 +66,7 @@ export class PaperWorkflow {
     source: "elsevier-api" | "browser";
     apiFallbackReason?: string;
   }> {
+    await ensureFauVpnConnected();
     // Prefer the official Elsevier API for ScienceDirect: no browser, no captcha.
     let apiFallbackReason: string | undefined;
     // Keep caller-supplied names inside downloadDir (no path separators / traversal).
@@ -126,8 +128,8 @@ export class PaperWorkflow {
     return {
       pageUrl: page.url(),
       message:
-        "Browser tab opened. Ask the user to sign in via 'Access through your institution' / 'Institutional Sign In' " +
-        "in that window, then retry the download. The tab can be closed after login.",
+        "Browser tab opened for human institutional sign-in or verification. " +
+        "The session uses the persistent browser profile.",
     };
   }
 
@@ -161,5 +163,5 @@ export class PaperWorkflow {
 export const paperWorkflow = new PaperWorkflow();
 
 function loginHint(url: string): string {
-  return `A human must log in via their institution once: MCP tool open_login_page / POST /api/papers/login, or CLI: npm run login -- "${url}"`;
+  return `Institutional sign-in or human verification may be required for ${url}.`;
 }

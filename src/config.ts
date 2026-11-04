@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // Project root (works from both src/ and dist/), so agents can launch the tools from any working directory.
@@ -8,6 +9,12 @@ try {
   process.loadEnvFile(path.join(projectRoot, ".env"));
 } catch {
   // No .env file - rely on the real environment.
+}
+
+// Prefer a browser bundle moved together with this project; an explicit override wins.
+const bundledBrowsers = path.join(projectRoot, "browsers");
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH && existsSync(bundledBrowsers)) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = bundledBrowsers;
 }
 
 export const appConfig = {

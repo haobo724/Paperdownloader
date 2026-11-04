@@ -7,3 +7,4 @@ downloads/
 .tmp/
 *.log
 .DS_Store
+browsers/

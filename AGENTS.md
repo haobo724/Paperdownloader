@@ -1,45 +1,29 @@
 # Agent guide: PaperDownloader
 
-Tool for downloading full-text paper PDFs from article page URLs via a persistent, institution-logged-in browser. It does **not** search for papers — the caller supplies article URLs (or DOIs resolved to `https://doi.org/<doi>`).
+PaperDownloader is a download tool. The caller supplies an identified article URL, DOI landing URL, or a legitimate publisher/author share link. It does not search, recommend, rank, or select papers, generate research suggestions, or provide LLM prompts. Perform discovery and selection outside this project. Existing inspect/read/archive interfaces are auxiliary compatibility functions, not literature search or selection tools.
 
-## How to call
+## Local setup and invocation
 
-Prefer the MCP server (stdio): `node <repo>/dist/mcp/server.js` (run `npm run build` first if `dist/` is missing).
+- Project: `E:/Study/Paper-pool/Paperdownloader`.
+- Prefer its MCP server if the current session exposes it: `download_paper_pdf` accepts `{ "url": "...", "fileName": "optional" }`. In stdio clients, launch `node E:/Study/Paper-pool/Paperdownloader/dist/mcp/server.js` after building; set `PLAYWRIGHT_BROWSERS_PATH` to `E:/Study/Paper-pool/Paperdownloader/browsers`.
+- If the MCP tool is unavailable, run from the project directory in PowerShell:
 
-| Tool | Input | Output |
-|---|---|---|
-| `download_paper_pdf` | `{ url, fileName? }` | `{ url, pdfUrl, pdfPath, title, citation{title,doi,journal,publicationDate,authors[]}, source }` |
-| `inspect_paper` | `{ url }` | `{ pageUrl, title, citation, pdfUrl \| null }` |
-| `read_paper` | `{ url, maxChars? }` | `{ pageUrl, title, citation, text, truncated }` |
-| `open_login_page` | `{ url }` | opens a tab for the human to log in |
-| `archive_paper_to_zotero` | `{ url, title?, pdfPath? }` | Zotero API result |
+  ```powershell
+  $env:PLAYWRIGHT_BROWSERS_PATH = 'E:\Study\Paper-pool\Paperdownloader\browsers'
+  npm run download -- 'https://publisher.example/article'
+  ```
 
-Without MCP, use the CLI from the repo root:
+- If needed run `npm run build`; CLI output is one JSON result per URL. Check `ok`, `pdfPath`, `title`, `citation`, and `source`. Do not claim success without a real result.
+- Only one MCP, HTTP, CLI, or login process may use the persistent browser profile at once. Never start a second process with that profile. In MCP use `open_login_page` in the existing server; in CLI, close the login browser before running the download command again.
 
-```bash
-npm run download -- "<url1>" "<url2>"   # one JSON line per URL on stdout; exit code 1 if any failed
-```
+## VPN and human verification
 
-or the HTTP API (`npm run start`, `POST http://127.0.0.1:3000/api/papers/download-pdf` with `{ "url": "..." }`).
+- Before each download, the program checks `eduvpn.fau.de`. If disconnected, it attempts to start the official client and connect the saved FAU profile without moving the mouse, then checks the tunnel. This requires an interactive Windows desktop; the server-list path may briefly change keyboard focus. Do not disconnect or toggle an active tunnel. If automatic connection, login, MFA, or VPN verification fails, report it and let the user complete the required step.
+- ScienceDirect / Elsevier may request a robot or other human verification even when FAU login and VPN are already active. The program waits for recognized challenges but cannot detect every challenge or guarantee that its PDF timeout waits for completion. Never solve CAPTCHAs or enter credentials. Ask the user to complete the challenge in the PaperDownloader browser, retain the same browser profile, and retry after confirmation. `open_login_page` is available in the running MCP server; for CLI use `npm run login -- '<article or legitimate share URL>'`, wait for the user to finish and close the browser, then retry. Do not equate a timeout, missing PDF link, or displayed institution name with proof of missing entitlement.
+- The persistent profile and session-cookie snapshot are under `.browser-profile/`; they may expire or be revoked. Do not expose, copy into prompts, or commit credentials, cookies, profile files, or `.env`.
 
-## Recommended flow
+## Verify and report
 
-1. Call `download_paper_pdf` with the article landing page URL.
-2. On success, use `pdfPath` (absolute path) and `citation`.
-3. On an error mentioning *no full-text access*, *log in*, or *Timed out waiting for a PDF response*:
-   call `open_login_page` with the same URL, tell the user to sign in via "Access through your institution" in the opened browser window, wait for their confirmation, then retry once.
-4. On *No PDF link found*: the platform is unsupported — report the URL; do not loop.
-
-## Rules
-
-- Never try to log in, enter credentials, or solve captchas yourself; these are human-only steps. Human verification is waited for automatically (up to 5 min).
-- Only one process may use the browser profile at a time. Do not run `npm run login` / `npm run download` while the MCP or HTTP server is running.
-- Call tools sequentially; each download takes ~5–30 s and a visible browser window is used.
-- Do not read or commit `.env`, `.browser-profile/`, or `downloads/`.
-
-## Code map
-
-- `src/browser/persistentBrowser.ts` — browser lifecycle, session-cookie persistence, PDF link detection (`findPdfUrl`; add platform-specific rules here), PDF capture.
-- `src/workflow/paperWorkflow.ts` — high-level operations shared by MCP, HTTP, and CLI.
-- `src/mcp/server.ts`, `src/server.ts`, `src/download.ts`, `src/login.ts` — entry points.
-- Constraint: callbacks passed to `page.evaluate` must not contain named inner functions (tsx/esbuild `__name` issue).
+- Confirm the result is a real PDF and that its title/DOI matches the requested paper; report the local `pdfPath` and source. A share link may give access independent of FAU, and an institution name alone does not prove entitlement.
+- `archive_paper_to_zotero` creates a bibliographic item and records the PDF path in `extra`; it does not upload a PDF attachment. Use an appropriate Zotero workflow for requested attachments and verify them separately.
+- Errors may indicate unavailable access, a challenge, page changes, or network failure. Report the actual result and any user action needed; do not claim a download or attachment that was not verified.
