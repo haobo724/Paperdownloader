@@ -6,7 +6,19 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 const HUMAN_VERIFICATION_TIMEOUT_MS = Number(process.env.HUMAN_VERIFICATION_TIMEOUT_MS ?? 300_000);
 /** How long to wait for PDF bytes when no human-verification challenge is shown. */
 const PDF_RESPONSE_TIMEOUT_MS = 30_000;
+const IN_PAGE_FETCH_TIMEOUT_MS = 20_000;
+const IN_PAGE_RETRY_DELAYS_MS = [1_000, 2_000];
 const CHALLENGE_TITLE = /just a moment|nur einen moment|un instant|un momento|are you a robot|attention required/i;
+
+/** Remove query strings and fragments that may contain access tokens. */
+function safeUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "unavailable";
+  }
+}
 
 export type CitationMeta = {
   title?: string;
@@ -141,7 +153,7 @@ export class PersistentEdgeBrowser {
       if (!prompted) {
         prompted = true;
         await page.bringToFront().catch(() => undefined);
-        console.error(`[browser] Human verification required on ${page.url()} - please complete it in the browser window.`);
+        console.error(`[browser] Human verification required on ${safeUrl(page.url())} - please complete it in the browser window.`);
       }
       await page.waitForTimeout(1_000);
     }
@@ -149,17 +161,20 @@ export class PersistentEdgeBrowser {
     throw new Error(`Human verification was not completed within ${HUMAN_VERIFICATION_TIMEOUT_MS / 1000}s.`);
   }
 
-  private async isChallengePage(page: Page): Promise<boolean> {
+  private async inspectChallengePage(page: Page): Promise<boolean | null> {
     try {
       const title = await page.title();
-      if (CHALLENGE_TITLE.test(title)) {
-        return true;
-      }
+      if (CHALLENGE_TITLE.test(title)) return true;
       return (await page.locator("iframe[src*='challenges.cloudflare.com']").count()) > 0;
     } catch {
-      // Execution context destroyed by a navigation - treat as still pending.
-      return true;
+      // A navigation can briefly destroy the page context; this is not evidence of a challenge.
+      return null;
     }
+  }
+
+  private async isChallengePage(page: Page): Promise<boolean> {
+    // During navigation, keep waiting rather than assuming verification has cleared.
+    return (await this.inspectChallengePage(page)) ?? true;
   }
 
   // Note: callbacks passed to page.evaluate must not declare named inner functions, because tsx/esbuild
@@ -203,6 +218,22 @@ export class PersistentEdgeBrowser {
       return `https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber=${ieee[1]}`;
     }
 
+    // Springer Nature accepted manuscripts can expose a stale citation_pdf_url
+    // that redirects to HTML, while the article's own download link is a PDF.
+    const article = new URL(pageUrl);
+    if (article.hostname === "www.nature.com" && /^\/articles\/[^/]+$/.test(article.pathname)) {
+      const expectedPath = `${article.pathname}_reference.pdf`;
+      const referencePdf = await page.locator("a[href]").evaluateAll((links, expected) =>
+        links.map((link) => (link as HTMLAnchorElement).href).find((href) => {
+          const url = new URL(href);
+          return url.hostname === "www.nature.com" && url.pathname === expected;
+        }) ?? null, expectedPath);
+      if (referencePdf) return referencePdf;
+    }
+    // Sage's PDF/EPUB reader is an HTML page; navigate to its direct PDF route.
+    const sage = /^https:\/\/journals\.sagepub\.com\/doi\/(?:full\/|abs\/)?(10\.\d{4,9}\/.+?)(?:[?#].*)?$/.exec(pageUrl);
+    if (sage) return `https://journals.sagepub.com/doi/pdf/${sage[1]}`;
+
     const metaPdf = (await this.readCitationMeta(page)).pdfUrl;
     if (metaPdf) {
       return new URL(metaPdf, pageUrl).href;
@@ -221,20 +252,13 @@ export class PersistentEdgeBrowser {
     return match?.href ?? null;
   }
 
-  /** Poll for the PDF link (often rendered client-side). Stops early when a no-access marker shows up. */
+  /** Poll for a PDF link while the article page and access controls finish loading. */
   async waitForPdfUrl(page: Page, timeoutMs = 20_000): Promise<string | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const pdfUrl = await this.findPdfUrl(page).catch(() => null);
       if (pdfUrl) {
         return pdfUrl;
-      }
-      const noAccess = await page
-        .getByText(/purchase pdf|get access/i)
-        .count()
-        .catch(() => 0);
-      if (noAccess > 0) {
-        return null;
       }
       await page.waitForTimeout(1_000);
     }
@@ -246,39 +270,60 @@ export class PersistentEdgeBrowser {
    * uses the browser's cookies and trusted certificates), then falls back to navigating to the PDF URL.
    */
   async fetchPdf(pdfUrl: string, outputPath: string, sourcePage?: Page): Promise<string> {
-    const inPage = sourcePage ? await this.fetchPdfInPage(sourcePage, pdfUrl) : null;
-    if (inPage) {
-      await mkdir(path.dirname(outputPath), { recursive: true });
-      await writeFile(outputPath, inPage);
-      return outputPath;
+    let inPage: { bytes: Buffer | null; diagnostic: string; retryable: boolean; challenge: boolean } | null = null;
+    if (sourcePage) {
+      for (let attempt = 0; attempt <= IN_PAGE_RETRY_DELAYS_MS.length; attempt++) {
+        inPage = await this.fetchPdfInPage(sourcePage, pdfUrl);
+        if (inPage.bytes) {
+          await mkdir(path.dirname(outputPath), { recursive: true });
+          await writeFile(outputPath, inPage.bytes);
+          return outputPath;
+        }
+        // Never repeatedly request a recognized challenge or a persistent authorization failure.
+        if (inPage.challenge || !inPage.retryable || attempt === IN_PAGE_RETRY_DELAYS_MS.length) break;
+        await sourcePage.waitForTimeout(IN_PAGE_RETRY_DELAYS_MS[attempt]);
+      }
     }
-    return this.fetchPdfByNavigation(pdfUrl, outputPath);
+    try {
+      return await this.fetchPdfByNavigation(pdfUrl, outputPath);
+    } catch (error) {
+      const detail = inPage?.diagnostic ? `; in-page request: ${inPage.diagnostic}` : "";
+      throw new Error(`${error instanceof Error ? error.message : String(error)}${detail}`, { cause: error });
+    }
   }
 
-  private async fetchPdfInPage(page: Page, pdfUrl: string): Promise<Buffer | null> {
-    const dataUrl = await page
-      .evaluate(async (url) => {
+  private async fetchPdfInPage(page: Page, pdfUrl: string): Promise<{ bytes: Buffer | null; diagnostic: string; retryable: boolean; challenge: boolean }> {
+    try {
+      const result = await page.evaluate(async ({ url, timeoutMs }) => {
         try {
-          const res = await fetch(url, { credentials: "include" });
-          if (!res.ok) {
-            return null;
+          const response = await fetch(url, { credentials: "include", signal: AbortSignal.timeout(timeoutMs) });
+          const type = (response.headers.get("content-type") ?? "unknown").split(";")[0];
+          const blob = await response.blob();
+          const signature = await blob.slice(0, 5).text();
+          if (response.ok && signature === "%PDF-") {
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(blob);
+            });
+            return { dataUrl, diagnostic: `HTTP ${response.status}, PDF`, retryable: false, challenge: false };
           }
-          const blob = await res.blob();
-          if ((await blob.slice(0, 5).text()) !== "%PDF-") {
-            return null;
-          }
-          return await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(blob);
-          });
-        } catch {
-          return null;
+          const html = type.includes("html") || /^\s*</.test(signature);
+          const sample = html ? await blob.slice(0, 65_536).text() : "";
+          const challenge = /<title[^>]*>\s*(?:just a moment|attention required|are you a robot)|challenges\.cloudflare\.com|cf-turnstile|g-recaptcha|h-captcha|verify (?:that )?you are human|are you a robot/i.test(sample);
+          const temporary = response.status === 429 || response.status >= 500 || /temporarily unavailable|service unavailable|try again later/i.test(sample);
+          const classification = challenge ? "human verification detected" : temporary ? "temporary error indicated" : html ? "HTML response; cause unknown" : "non-PDF response";
+          const retryable = !challenge && response.status !== 401 && response.status !== 403 && (html || temporary);
+          return { dataUrl: null, diagnostic: `HTTP ${response.status}, ${type}, ${classification}`, retryable, challenge };
+        } catch (error) {
+          return { dataUrl: null, diagnostic: error instanceof Error ? error.name : "request failed", retryable: true, challenge: false };
         }
-      }, pdfUrl)
-      .catch(() => null);
-    return dataUrl ? Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64") : null;
+      }, { url: pdfUrl, timeoutMs: IN_PAGE_FETCH_TIMEOUT_MS });
+      return { bytes: result.dataUrl ? Buffer.from(result.dataUrl.slice(result.dataUrl.indexOf(",") + 1), "base64") : null, diagnostic: result.diagnostic, retryable: result.retryable, challenge: result.challenge };
+    } catch {
+      return { bytes: null, diagnostic: "page navigation or request error", retryable: false, challenge: false };
+    }
   }
 
   /** Navigate to the PDF URL and capture the PDF bytes from the network or a download. */
@@ -288,6 +333,18 @@ export class PersistentEdgeBrowser {
 
     try {
       const isPdf = (bytes: Buffer) => bytes.subarray(0, 5).toString("latin1") === "%PDF-";
+      let lastNavigation = "no navigation response";
+      let retryableNavigationHtml = false;
+      let navigationResponseAt = 0;
+      let navigationAttempts = 1;
+      page.on("response", (response) => {
+        if (response.request().isNavigationRequest() && response.frame() === page.mainFrame()) {
+          const type = (response.headers()["content-type"] ?? "unknown").split(";")[0];
+          lastNavigation = `HTTP ${response.status()}, ${type}`;
+          retryableNavigationHtml = type.includes("html") && response.status() !== 401 && response.status() !== 403;
+          navigationResponseAt = Date.now();
+        }
+      });
       const captured = new Promise<Buffer>((resolve) => {
         // In headed Chromium the built-in PDF viewer first serves an HTML shell under the PDF URL and then
         // streams the real bytes via chrome-extension://, so only accept bodies with the %PDF- magic.
@@ -304,27 +361,52 @@ export class PersistentEdgeBrowser {
           }
         });
         page.on("download", async (download) => {
-          const body = await readFile(await download.path());
-          if (isPdf(body)) {
-            resolve(body);
+          try {
+            const body = await readFile(await download.path());
+            if (isPdf(body)) resolve(body);
+          } catch {
+            // A cancelled or failed browser download is not a valid PDF.
           }
         });
       });
 
       // goto rejects with "Download is starting" when the PDF is served as an attachment; that is expected.
       void page.goto(pdfUrl, { timeout: 90_000 }).catch(() => undefined);
-      void this.waitForHumanVerification(page).catch(() => undefined);
 
-      // Fail fast unless a human-verification challenge is on screen, in which case allow time to solve it.
+      // Detect a challenge after navigation starts; never reload it automatically.
       let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<never>((_, reject) => {
         const started = Date.now();
-        let challenged = false;
+        let challengeStarted: number | undefined;
+        let challengeEnded: number | undefined;
+        let checking = false;
         timer = setInterval(async () => {
-          challenged ||= await this.isChallengePage(page).catch(() => false);
-          const limit = challenged ? HUMAN_VERIFICATION_TIMEOUT_MS : PDF_RESPONSE_TIMEOUT_MS;
-          if (Date.now() - started > limit) {
-            reject(new Error(`Timed out waiting for a PDF response from ${pdfUrl} (landed on ${page.url()})`));
+          if (checking) return;
+          checking = true;
+          try {
+            const challenge = page.url() !== "about:blank" ? await this.inspectChallengePage(page) : null;
+            if (challenge === true && (!challengeStarted || challengeEnded)) {
+              challengeStarted = Date.now();
+              challengeEnded = undefined;
+              await page.bringToFront().catch(() => undefined);
+              console.error(`[browser] Human verification required on ${safeUrl(page.url())} - please complete it in the browser window.`);
+            } else if (challenge === false && challengeStarted && !challengeEnded) {
+              challengeEnded = Date.now();
+              console.error("[browser] Verification page closed or cleared; waiting for PDF.");
+            }
+            // Only retry plain HTML when no challenge was detected in this navigation.
+            if (challenge === false && !challengeStarted && retryableNavigationHtml && navigationAttempts < 3 && Date.now() - navigationResponseAt >= 1_500) {
+              navigationAttempts++;
+              retryableNavigationHtml = false;
+              void page.goto(pdfUrl, { timeout: 90_000 }).catch(() => undefined);
+            }
+            const elapsed = Date.now() - (challengeEnded ?? challengeStarted ?? started);
+            const limit = challengeStarted && !challengeEnded ? HUMAN_VERIFICATION_TIMEOUT_MS : PDF_RESPONSE_TIMEOUT_MS;
+            if (elapsed > limit) {
+              reject(new Error(`Timed out waiting for PDF from ${safeUrl(pdfUrl)} (landed on ${safeUrl(page.url())}; ${lastNavigation}; human verification ${challengeStarted ? "detected" : "not detected"})`));
+            }
+          } finally {
+            checking = false;
           }
         }, 1_000);
       });

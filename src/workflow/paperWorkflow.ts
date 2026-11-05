@@ -114,7 +114,7 @@ export class PaperWorkflow {
           pdfUrl,
           pdfPath,
           title,
-          citation,
+          citation: { ...citation, pdfUrl },
           source: "browser",
           apiFallbackReason,
           vpn,

@@ -91,6 +91,14 @@ For ScienceDirect, an Elsevier API key can enable the official API path. Otherwi
 
 A publisher page showing an institution name does not itself prove that a particular article is covered. Likewise, access through an author's sharing link does not prove institutional entitlement.
 
+Nature article-in-press pages can expose a stale metadata PDF URL while their main article link ends in `_reference.pdf`; the downloader checks for that article-specific link without selecting supplementary material. Sage article pages can link to an HTML PDF/EPUB reader; the downloader tries the corresponding direct `/doi/pdf/` route. Publisher layouts may change.
+
+The tool first tries an in-page request and then browser navigation. If both fail, the error reports available HTTP status, response type, and whether a human-verification page was detected. A 403 from an in-page request does not prove that direct browser navigation will fail. Query strings and fragments are removed from PDF timeout diagnostics because they may contain temporary access tokens. Access and verification decisions remain with the publisher.
+
+When the in-page PDF request returns ordinary HTML or indicates a temporary error, the downloader retries up to two times with short delays before browser navigation. Ordinary HTML returned by navigation can also be retried up to twice when no challenge is detected. Recognized human-verification pages and HTTP 401/403 are not repeatedly fetched; browser navigation may still succeed, or the user can complete verification. HTML without a recognizable reason is reported as cause unknown, not assumed to be a temporary error. For example, a PMC PDF link can return HTTP 200 with HTML rather than PDF; the status alone does not identify the cause.
+
+Run `npm test` after changing PDF-link detection or download handling. The regression tests use intercepted pages and a local server; they cover delayed links, article versus supplementary PDFs, Sage readers, and navigation fallback after a rejected in-page request.
+
 ## Configuration
 
 | Variable | Default | Purpose |

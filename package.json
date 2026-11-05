@@ -10,7 +10,8 @@
     "login": "tsx src/login.ts",
     "download": "tsx src/download.ts",
     "mcp": "node dist/mcp/server.js",
-    "check": "npm run build"
+    "check": "npm run build",
+    "test": "npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
