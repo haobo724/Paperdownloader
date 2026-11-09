@@ -6,6 +6,10 @@ PaperDownloader downloads research-paper PDFs from article URLs or legitimate pu
 
 This is a download tool. It does not search for, select, rank, or recommend papers, and it does not provide research suggestions or prompts to language models. The caller supplies the paper to download. The existing page inspection, reading, and Zotero item interfaces are retained for compatibility.
 
+## Codex Skill
+
+The reusable Codex Skill is in [`skills/paperdownloader`](skills/paperdownloader/SKILL.md). Install that directory under the Codex skills directory to make it available across projects. The skill describes how to call this checkout; it does not bundle the downloader. Point it to a working checkout with `PAPERDOWNLOADER_ROOT`, applicable user instructions, or an optional machine-local `references/local-installation.md` in the installed skill directory. Do not put local paths, credentials, or browser state in the repository.
+
 ## Important: Elsevier robot verification
 
 **ScienceDirect / Elsevier may ask “Are you a robot?” even when institutional access is already active.** Human verification may also be required for other publishers.
