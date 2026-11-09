@@ -15,7 +15,7 @@ Use PaperDownloader by default for research-paper downloads unless the user sele
 
 ## Access and verification
 
-The downloader's default VPN mode is `auto`: on supported Windows setups it checks eduVPN and attempts connection, but continues if unavailable. Report an unavailable VPN when relevant, and ask about configuration when it would help. `VPN_MODE=none` skips VPN management; strict settings are documented by the project. Do not disconnect an active tunnel.
+The default VPN mode is `auto`: on supported Windows setups it checks eduVPN and attempts a connection only when the target is unambiguous; downloading continues if unavailable. Report an unavailable VPN when relevant, and ask about configuration when useful. `VPN_MODE=none` skips VPN management, `VPN_MODE=eduvpn` requires eduVPN, and `VPN_MODE=external` supports explicitly configured status and connection commands for other VPNs. Consult the checkout README for settings and exit codes. Do not guess between profiles, expose credentials, or disconnect an active tunnel.
 
 Publisher sign-in and human verification belong to the user. ScienceDirect/Elsevier may ask for robot verification even with institutional access. Use the existing MCP server's `open_login_page`, or the project's CLI login command when no server is running; ask the user to complete the challenge in the PaperDownloader browser and retry with the same profile. Do not automate CAPTCHA or credentials. A timeout, HTML response, or 403 alone does not establish lack of access; report the actual diagnostic. Keep browser profiles, cookies, credentials, and local keys private.
 

@@ -76,9 +76,9 @@ The server listens on `http://127.0.0.1:3000`. Send `POST /api/papers/download-p
 
 ## Optional VPN and institutional access
 
-By default, the downloader detects the FAU eduVPN connection on Windows and attempts to connect an installed client when needed. If the client is missing, the platform is unsupported, or connection fails, the download still proceeds. The result includes a `vpn` object describing the status so the caller can decide whether VPN setup is needed. A failed download also includes the unavailable VPN status in its error message.
+By default (`VPN_MODE=auto`), the downloader checks eduVPN on Windows and attempts to connect only when the saved target can be identified unambiguously. If it is unavailable or connection cannot be verified, downloading continues and the result reports the VPN status. To require a verified eduVPN connection, set `VPN_MODE=eduvpn`; set `VPN_MODE=none` to skip VPN management. The eduVPN integration requires an interactive Windows desktop and may briefly change keyboard focus. Use `EDUVPN_SERVER_NAME` and `EDUVPN_PROFILE_NAME` to restrict the target by exact display name. If either is set, `EDUVPN_ADAPTER_NAME` must also name its exact network adapter so the target connection can be verified; select the intended profile in eduVPN if it is not already selected. Complete any login or human verification yourself. The downloader does not read VPN passwords, guess between multiple profiles, or intentionally disconnect an existing tunnel. Detection of other VPN clients uses adapter-name heuristics and is not exhaustive: use `external` with a configured status check, or `none`, when preserving another client's state requires certainty.
 
-For a strict VPN requirement, set `VPN_MODE=fau-eduvpn`: a connection failure then stops the download. Set `VPN_MODE=none` to disable VPN management. The optional FAU integration requires an interactive Windows desktop, may briefly change keyboard focus, and never deliberately disconnects an active tunnel. It does not read the VPN password. Other VPNs are managed outside this tool.
+For another VPN client, set `VPN_MODE=external` and configure `VPN_STATUS_EXECUTABLE`; optionally set `VPN_STATUS_ARGS_JSON` to a JSON array of arguments. The status command must exit **0** when connected, **1** when disconnected, and any other code when status is unknown. Optionally configure `VPN_CONNECT_EXECUTABLE` and `VPN_CONNECT_ARGS_JSON` (a JSON string array). The tool runs that command only after the status check explicitly reports disconnected, then checks the status again; unknown status never triggers a connection. External mode reports failures but does not block the download. Programs are executed without a shell, and their output and arguments are not included in diagnostics. Supply credentials using the VPN client's own secure mechanisms rather than command-line arguments. Only configure a trusted connection executable that will not disconnect or switch another tunnel; the downloader cannot verify a third-party program's internal behavior.
 For institutional sign-in, open the article in PaperDownloader's persistent browser:
 
 ```bash
@@ -112,8 +112,11 @@ Run `npm test` after changing PDF-link detection or download handling. The regre
 | `PLAYWRIGHT_BROWSERS_PATH` | Project `browsers/` if present; otherwise Playwright default | Chromium installation directory |
 | `BROWSER_CHANNEL` | Playwright Chromium | Optional browser channel, such as `msedge` |
 | `PLAYWRIGHT_HEADLESS` | `false` | Headless browser mode; publisher access may be affected |
-| `VPN_MODE` | `auto` | `auto`: detect and attempt connection without blocking downloads; `none`: disabled; `fau-eduvpn`: require the FAU VPN |
-| `EDUVPN_CLIENT_PATH` | Search standard Windows locations | Optional full path to `eduVPN.Client.exe` when the integration is enabled |
+| `VPN_MODE` | `auto` | `auto`: try eduVPN without blocking downloads; `none`: disabled; `eduvpn`: require eduVPN; `external`: use configured VPN commands |
+| `EDUVPN_CLIENT_PATH` | Search standard Windows locations | Optional path to the eduVPN client |
+| `EDUVPN_ADAPTER_NAME`, `EDUVPN_SERVER_NAME`, `EDUVPN_PROFILE_NAME` | Unset | Optional exact names for selecting the eduVPN adapter, saved server and profile |
+| `VPN_STATUS_EXECUTABLE`, `VPN_STATUS_ARGS_JSON` | Unset, `[]` | External VPN status executable and JSON argument array; exit 0 connected, 1 disconnected, other unknown |
+| `VPN_CONNECT_EXECUTABLE`, `VPN_CONNECT_ARGS_JSON` | Unset, `[]` | Optional external VPN connection executable and JSON argument array |
 | `HUMAN_VERIFICATION_TIMEOUT_MS` | `300000` | Maximum wait for a recognized human-verification challenge |
 | `PORT` | `3000` | Local HTTP server port |
 | `ELSEVIER_API_KEY`, `ELSEVIER_INSTTOKEN` | Unset | Optional Elsevier API credentials; full text requires entitlement |
