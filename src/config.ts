@@ -26,6 +26,7 @@ export const appConfig = {
   // Elsevier TDM API: full text needs entitlement via institutional IP or an insttoken.
   elsevierApiKey: process.env.ELSEVIER_API_KEY ?? "",
   elsevierInstToken: process.env.ELSEVIER_INSTTOKEN ?? "",
+  zoteroApiMode: process.env.ZOTERO_API_MODE ?? "local",
   zoteroApiKey: process.env.ZOTERO_API_KEY ?? "",
   zoteroUserId: process.env.ZOTERO_USER_ID ?? "",
   zoteroLibraryType: process.env.ZOTERO_LIBRARY_TYPE ?? "user",

@@ -113,12 +113,31 @@ Run `npm test` after changing PDF-link detection or download handling. The regre
 | `HUMAN_VERIFICATION_TIMEOUT_MS` | `300000` | Maximum wait for a recognized human-verification challenge |
 | `PORT` | `3000` | Local HTTP server port |
 | `ELSEVIER_API_KEY`, `ELSEVIER_INSTTOKEN` | Unset | Optional Elsevier API credentials; full text requires entitlement |
-| `ZOTERO_API_KEY`, `ZOTERO_USER_ID`, `ZOTERO_LIBRARY_TYPE` | Unset, unset, `user` | Optional Zotero item creation settings |
+| `ZOTERO_API_MODE` | `local` | Use the local Zotero API by default; set to `web` explicitly for legacy Web API archiving |
+| `ZOTERO_API_KEY`, `ZOTERO_USER_ID`, `ZOTERO_LIBRARY_TYPE` | Unset, unset, `user` | Web API item creation settings, used only in explicit `web` mode |
 
 ## Compatibility interfaces
 
 The MCP server also exposes `inspect_paper`, `read_paper`, `open_login_page`, and `archive_paper_to_zotero`. The HTTP server exposes corresponding `/api/papers/inspect`, `/api/papers/read`, `/api/papers/login`, and `/api/papers/archive` endpoints, plus `/health`.
 
 `inspect_paper` returning a null PDF URL means no link was detected; it does not establish whether access is available. The Zotero archive function creates an item and records the local PDF path in `extra`; it **does not upload the PDF as an attachment**. Use and verify a separate Zotero attachment workflow when required.
+
+## Zotero authorization for downstream workflows
+
+PaperDownloader is a downloader. Downloading and translating a PDF do not themselves require a Zotero key. When the user also requests Zotero changes, an agent may use a separate Zotero workflow to import or edit the item and attach files. The built-in `archive_paper_to_zotero` compatibility interface uses the **Zotero local API by default** and the same shared local credential. Set `ZOTERO_API_MODE=web` explicitly to use the legacy Web API and `ZOTERO_API_KEY` instead. Both modes create metadata only; neither uploads PDF files. Pass an optional `collectionKey` to choose a collection explicitly; otherwise the new item is not added to a collection.
+
+Zotero Desktop 10+ also exposes a **local API** at `http://127.0.0.1:23119/api/`, separate from the Web API. It can edit local items and upload stored attachments. Local read requests require no key; local writes require a key granted by the user through Zotero's authorization dialog. Web API and local API keys are different and cannot be interchanged. Older Zotero local APIs are read-only. See the official [local API documentation](https://www.zotero.org/support/dev/web_api/v3/local_api) and [file upload documentation](https://www.zotero.org/support/dev/web_api/v3/file_upload).
+
+On Windows, the optional `scripts/zotero_local_auth.py` helper uses the same Windows Credential Manager entry for all authorized local Zotero workflows on the same Zotero server. Python 3 and a running, enabled Zotero 10+ local API are required. If the shared key is missing or rejected, local archiving reports that authorization is needed; run `setup` and let the user approve before retrying. It stores no key in this repository. The local archive interface uses the helper. PDF translation plugins must use an authorized downstream Zotero workflow when attaching their output.
+
+```powershell
+python scripts/zotero_local_auth.py status  # Check for an existing local credential
+python scripts/zotero_local_auth.py setup   # Reuse it or ask Zotero for authorization
+python scripts/zotero_local_auth.py verify  # Validate it without changing library items
+```
+
+If authorization is needed, tell the user that Zotero will show a prompt. The user chooses whether to allow it; do not control the dialog or bypass it. **Allow** grants a single-use key. **Always Allow** grants a reusable key; the helper saves it in Windows Credential Manager for that Windows user and Zotero server ID, then reuses it across processes. A local key allows writes to all libraries the user can edit, so retain it securely and use it only for authorized tasks. Zotero can revoke remembered authorizations in Settings → Advanced. If a key is revoked, missing, or rejected with HTTP 401, remove the stale cached entry and request authorization again; do not repeatedly prompt without explaining why. Do not log keys or put them in repository files, prompts, command lines, or URLs.
+
+Python callers may import `get_write_headers()` from the helper and use its returned headers in memory for local writes. On a 401, call `forget_key(server_id)` and retry only the request rejected as unauthorized after a fresh grant. Check the target collection and existing children before writing; Zotero Connector's save endpoints target the selected collection, unlike explicit local API item updates. Verify a saved attachment belongs to the intended item, is a parseable PDF, and matches the downloaded or translated file. Handle partial uploads without creating duplicates. A separate PDF2zh translation workflow should use short temporary filenames if Windows path lengths cause output-save errors; verify the translation before attaching it.
 
 The `.env`, `.browser-profile/`, `downloads/`, and `browsers/` paths are ignored by Git and should not be committed.

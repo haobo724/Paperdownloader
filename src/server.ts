@@ -38,7 +38,7 @@ app.post("/api/papers/login", route((_body, url) => paperWorkflow.openForLogin(u
 app.post(
   "/api/papers/archive",
   route((body, url) =>
-    paperWorkflow.archivePaper({ url, title: optionalString(body.title), pdfPath: optionalString(body.pdfPath) }),
+    paperWorkflow.archivePaper({ url, title: optionalString(body.title), pdfPath: optionalString(body.pdfPath), collectionKey: optionalString(body.collectionKey) }),
   ),
 );
 

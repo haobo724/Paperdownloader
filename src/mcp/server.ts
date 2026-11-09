@@ -69,14 +69,15 @@ server.registerTool(
 server.registerTool(
   "archive_paper_to_zotero",
   {
-    description: "Create a Zotero journalArticle item (title, URL; local PDF path noted in 'extra'). Requires ZOTERO_* in .env.",
+    description: "Create a Zotero journalArticle item using the local API by default. The PDF path is recorded in extra, not attached.",
     inputSchema: {
       url: z.string().url(),
       title: z.string().optional(),
       pdfPath: z.string().optional(),
+      collectionKey: z.string().optional().describe("Optional explicit Zotero collection key."),
     },
   },
-  ({ title, url, pdfPath }) => asToolResult(() => paperWorkflow.archivePaper({ title, url, pdfPath })),
+  ({ title, url, pdfPath, collectionKey }) => asToolResult(() => paperWorkflow.archivePaper({ title, url, pdfPath, collectionKey })),
 );
 
 const shutdown = async () => {
